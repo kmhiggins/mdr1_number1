@@ -1,0 +1,6 @@
+	MEGs_embryo	PEGs_embryo	All_embryo	MEGs_endo	PEGs_endo	All_endo
+zero	15	8	559	7	2	223
+non_zero	13	51	11163	21	57	11499
+>2kb	6	23	8895	19	46	10330
+<2kb_up	6	20	1462	2	8	786
+<2kb_down	1	8	806	0	3	383

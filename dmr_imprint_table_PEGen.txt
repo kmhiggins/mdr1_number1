@@ -1,0 +1,3 @@
+	PEGs_endo	All_endo
+zero	2	223
+non_zero	57	11499

@@ -1,0 +1,3 @@
+	PEGs_embryo	All_embryo
+zero	8	559
+non_zero	51	11163

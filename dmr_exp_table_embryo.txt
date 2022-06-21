@@ -1,0 +1,3 @@
+	Constitutive_embryo	Endo_embryo	Not_exp_embryo
+zero	139	380	65
+non_zero	2785	6952	1557
