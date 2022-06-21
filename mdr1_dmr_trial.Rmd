@@ -1,0 +1,350 @@
+ 
+Read in data needed
+```{r}
+
+#DMR and EMR files
+
+embryo_dmr <- read.table("embryo_DMRs_IDs.txt",sep="\ ",header=F,stringsAsFactors = F)
+endosperm_dmr <- read.table("endo_DMRs_IDs.txt",sep="\ " , header=F, stringsAsFactors = F)
+
+embryo_emr <- read.table("embryo_EMRs_IDs.txt",sep="\ ",header=F,stringsAsFactors = F)
+endosperm_emr <- read.table("endo_EMRs_IDs.txt",sep="\ ", header=F, stringsAsFactors = F)
+
+# Read in GC files
+
+embryo_d_GC <- read.table("embryohyperDMRs_GC_tab.txt",sep="\t",header=F, fill=T,stringsAsFactors = F)
+endosperm_d_GC <- read.table("endospermhyperDMRs_GC_tab.txt",sep="\t",header=F, fill=T,stringsAsFactors = F)
+
+embryo_e_GC <- read.table("embryoEMRs_GC_tab.txt",sep="\t",header=F, fill=T,stringsAsFactors = F)
+endosperm_e_GC <- read.table("endospermEMRs_GC_tab.txt",sep="\t",header=F, fill=T,stringsAsFactors = F)
+
+#Subsample EMRs
+embryo_emr_sub <- embryo_emr[sample(1:nrow(embryo_emr), 56781, replace=FALSE),]
+endosperm_emr_sub <- endosperm_emr[sample(1:nrow(endosperm_emr), 19947, replace=FALSE),]
+embryo_e_GC_sub <- embryo_e_GC[sample(1:nrow(embryo_e_GC), 52892, replace=FALSE),]
+endosperm_e_GC_sub <- endosperm_e_GC[sample(1:nrow(endosperm_e_GC), 18461, replace=FALSE),]
+
+#W22 files
+W22_imp <- read.table("B73.v.W22_features.out.txt", sep = "\t", header = T, stringsAsFactors = F)
+W22_exp <- read.table("genes.expressed.in.endosperm.vs.expressed.elsewhere.txt", sep = "\t", header = T, stringsAsFactors = F)
+```
+Load Packages for notebook
+```{r}
+library(ggplot2)
+library(DESeq2)
+library(RColorBrewer)
+library(epitools)
+library(rstatix)
+library(ggpubr)
+library(dplyr)
+library(vcd)
+library(gridExtra)
+library(sjPlot)
+library(knitr)
+library(MaizePal)
+library(ggsci)
+library(wesanderson)
+library(rstatix)
+library(tidyr)
+```
+
+Remove unnecessary columns and information from W22 files, then combine
+```{r}
+#Remove B73 genes and only work with W22 endosperm expressed
+W22_imp <- W22_imp[grep("Zm00004", W22_imp$feature),]
+W22_imp <- W22_imp[-c(2:13,15:22)]
+#Remove gene model ids since its not necessary
+
+#Combine dataframes so we know which are endosperm expressed and which arent
+W22_info <- W22_imp
+W22_info$category <- ifelse(W22_info$feature %in% W22_exp$feature, print(W22_exp$category), "not.expressed")
+
+
+# Read in gene.key to find syntenic genes and subset W22 to only include genes also annotated in B73
+synt <- read.table("gene_model_xref_v4c.txt", header = T, sep = "\t", stringsAsFactors = F)
+
+W22_info <- subset(W22_info, W22_info$feature %in% synt$W22.Zm00004b.1.)
+# Subset by sorghum syntelogs
+synt <- subset(synt, nchar(synt$sorghum_ortholog) > 0)
+
+# Find sorghum syntelogs 
+
+W22_info$syntelog <- ifelse(W22_info$feature %in% synt$W22.Zm00004b.1., "syntenic.sorghum", "not.syntenic")
+```
+Combine dmr/emr information into table
+
+
+
+
+```{r}
+#Create GC content df
+
+GC_cont <- bind_rows(embryo_e_GC_sub, endosperm_e_GC_sub, embryo_d_GC, endosperm_d_GC, .id = "origin")
+
+GC_cont$origin <- ifelse(GC_cont$origin == 1, "embryo_emr",
+                                 ifelse(GC_cont$origin == 2, "endosperm_emr", ifelse(GC_cont$origin == 3, "embryo_dmr",ifelse(GC_cont$origin == 4, "endosperm_dmr", "bad"))))
+
+GC_cont$origin2 <- ifelse(grepl("emr",GC_cont$origin), "EMR","DMR")
+
+
+#Join dfs into one
+
+dmr_endo <- bind_rows(embryo_dmr, endosperm_dmr, .id = "origin")
+
+# Replace numbers with df origin name
+
+dmr_endo$origin <- ifelse(dmr_endo$origin == 1, "embryo_dmr",
+                                 ifelse(dmr_endo$origin == 2, "endosperm_dmr", "bad"))
+
+
+# Get rid of empty columns
+dmr_endo$Description <- NULL
+dmr_endo$X <- NULL
+
+#Now with EMRs
+emr_endo <- bind_rows(embryo_emr, endosperm_emr, .id = "origin")
+
+# Replace numbers with df origin name
+emr_endo$origin <- ifelse(emr_endo$origin == 1, "embryo_emr",ifelse(emr_endo$origin == 2, "endosperm_emr", "bad"))
+
+
+```
+
+Add information then combine dmr and emr tables with W22 info
+
+```{r}
+#Merge emr and dmr into one table
+endo_exp <- bind_rows(emr_endo, dmr_endo, .id = "origin2")
+endo_exp$origin2 <- ifelse(endo_exp$origin2 == 1, "EMR", "DMR")
+endo_exp$class  <- ifelse(endo_exp$V3 > 2000, ">2kb",ifelse(endo_exp$V3 < -2000, ">2kb", ifelse(endo_exp$V3 < 0, "<2kb upstream", ifelse(endo_exp$V3 == 0, "zero", "<2kb downstream"))))
+
+#Merge with W22_info, and antimerge with W22_info
+
+exp_imp <- merge(endo_exp, W22_info, by.x = "V2", by.y = "feature",all=T)
+
+
+#not_exp <-anti_join(endo_exp, W22_info, by = c("V2" = "feature"))
+
+#Merge emr/dmr df with W22_exp
+
+W22_endo_exp <-  merge(endo_exp, W22_exp, by.x = "V2", by.y = "W22.Zm00004b.1.")
+
+#Merge emr/dmr with W22_imp
+
+W22_endo_imp <- merge(endo_exp, W22_imp, by.x = "V2", by.y = "feature")
+
+#Break into tissue groups
+
+#Take last 4 characters away from each element in origin 
+
+W22_endo_exp$origin <- substr(W22_endo_exp$origin, 1, nchar(W22_endo_exp$origin)-4)
+
+W22_embryo <- subset(W22_endo_exp, W22_endo_exp$origin == "embryo")
+W22_endosperm <- subset(W22_endo_exp, W22_endo_exp$origin == "endosperm")
+
+# Add concatenated column of endo.expressed and emr/dmr
+
+W22_embryo$merge <- paste(W22_embryo$category,"-", W22_embryo$origin2)
+W22_endosperm$merge <- paste(W22_endosperm$category,"-", W22_endosperm$origin2)
+```
+
+Start adjusting to run statistics
+```{r}
+
+DMR_W22 <- subset(exp_imp, exp_imp$origin2 == "DMR")
+DMR_W22 <- subset(DMR_W22, DMR_W22$filter.imprint != "filtered.MEG")
+# <- subset(DMR_W22, DMR_W22$syntelog == "syntenic.sorghum")
+DMR_W22$category <- ifelse(DMR_W22$V2 %in% W22_exp$W22.Zm00004b.1., W22_exp$category,"not.expressed")
+
+DMR_W22 <- DMR_W22%>% 
+  reorder_levels(class, order = c("zero", ">2kb", "<2kb upstream", "<2kb downstream"))
+
+#Gather summary statistics on variables
+W22_endo_imp %>% 
+  group_by(class) %>% 
+  get_summary_stats(RER, type = "common")
+
+#Get density plot
+density_distance_imp <- ggplot(DMR_W22, aes(x=RER)) + geom_density() + facet_wrap(origin ~ . )
+density_distance_imp
+
+
+summ <- DMR_W22%>% 
+  group_by(origin,class) %>% 
+  summarize(n=n(), RER = mean(RER))
+# Create violin plot of RER levels
+imp_violin <- ggplot(DMR_W22, aes(x=class, y=RER, fill = class)) + geom_violin(alpha = .6) + theme_classic() + scale_fill_manual(values = maize_pal("HopiBlue")) + facet_wrap(origin ~ .) + theme(axis.text.x = element_text(angle= 45, hjust=1, size = 15), text = element_text( size =15))  + geom_text(aes(label = n), data = summ, size=5)
+
+
+imp_violin 
+#Run ANOVA on df and tukey test
+#anova_res <- aov(class2 ~ origin, data = exp_imp) %>% tukey_hsd()
+
+#Subset so we can analyze within tissues
+W22_embryo_dmr <- subset(W22_endo_imp, W22_endo_imp$origin == "embryo_dmr")
+W22_endosperm_dmr <- subset(W22_endo_imp, W22_endo_imp$origin == "endosperm_dmr")
+W22_embryo_emr <- subset(W22_endo_imp, W22_endo_imp$origin == "embryo_emr")
+W22_endosperm_emr <- subset(W22_endo_imp, W22_endo_imp$origin == "endosperm_emr")
+
+#Run pairwise t tests for each frame
+pwc_embryo_dmr <- W22_embryo_dmr %>%
+  pairwise_t_test(RER ~ class, p.adjust.method = "fdr")
+pwc_embryo_dmr
+
+pwc_endosperm_dmr <- W22_endosperm_dmr %>%
+  pairwise_t_test(RER ~ class, p.adjust.method = "fdr")
+pwc_endosperm_dmr
+
+
+pwc_embryo_emr <- W22_embryo_emr %>%
+  pairwise_t_test(RER ~ class, p.adjust.method = "fdr")
+pwc_embryo_emr
+
+pwc_endosperm_emr <- W22_endosperm_emr %>%
+  pairwise_t_test(RER ~ class, p.adjust.method = "fdr")
+pwc_endosperm_emr
+
+# install.packages("devtools")
+#devtools::install_github("cgplab/Rockermeth")
+```
+
+
+```{r}
+#Run binomial test on df
+
+#Are DMRs enriched for endosperm expression
+successes_embryo <- nrow(subset(W22_embryo,W22_embryo$merge == "expressed.endo - DMR"))
+trials_embryo <- nrow(subset(W22_embryo, W22_embryo$origin2 == "DMR"))
+proportion_embryo <- nrow(subset(W22_embryo, W22_embryo$merge == "expressed.endo - EMR"))/nrow(subset(W22_embryo, W22_embryo$origin2 == "EMR"))
+embryo.p.val <- binom.test(successes_embryo,trials_embryo,proportion_embryo,alternative = "less")
+embryo.p.val
+
+successes_endosperm <- nrow(subset(W22_endosperm,W22_endosperm$merge == "expressed.endo - DMR"))
+trials_endosperm <- nrow(subset(W22_endosperm, W22_endosperm$origin2 == "DMR"))
+proportion_endosperm <- nrow(subset(W22_endosperm, W22_endosperm$merge == "expressed.endo - EMR"))/nrow(subset(W22_endosperm, W22_endosperm$origin2 == "EMR"))
+endosperm.p.val <- binom.test(successes_endosperm,trials_endosperm,proportion_endosperm,alternative = "less")
+endosperm.p.val
+
+```
+
+```{r}
+
+dmr_exp_table <- DMR_W22 %>%
+  group_by(origin,filter.imprint,class)%>%
+  summarise(n=n())%>%
+  mutate(Freq=n/sum(n))
+
+summ3 <- dmr_exp_table %>%
+  summarize(n=n(), Freq = mean(Freq))
+
+dmr_exp_table <- subset(dmr_exp_table, dmr_exp_table$class != ">2kb")
+
+write.table(dmr_exp_table, file = "ratios_endosperm_MEGs_table.txt", sep = "\t")
+
+bxp <- ggplot(dmr_exp_table, aes(fill=class, y=Freq, x=filter.imprint)) + geom_bar(position = position_dodge(), stat = "identity", cex = 2) + scale_fill_manual(values = maize_pal("FloweringTime")) + theme_classic() + scale_x_discrete(drop = F ,name= "Imprint Status",labels=c("MEG"="Maternally Expressed", "no.imprint"="Not imprinted", "PEG"="Paternally Expressed"))
+
+
+bxp + facet_wrap(origin ~ .) + theme(axis.text.x = element_text( angle= 45, hjust=1, size=15),text = element_text(size=20))
+
+#Look at GC content of EMRs vs DMRs
+summ2 <- GC_cont%>% 
+  group_by(origin,origin2) %>% 
+  summarize(n=n(), V3 = mean(V3))
+
+
+GC_cont$V3 <- as.numeric(GC_cont$V3)
+GC_violin <- ggplot(GC_cont, aes(x= origin, y=V3, fill= origin2)) + geom_violin(alpha = .6) + theme_classic() + theme(axis.text.x = element_text(face = "bold", angle= 45, hjust=1, size = 15))  + geom_text(aes(label = n), data = summ2)+ scale_fill_manual(values = maize_pal("HopiBlue")) 
+
+GC_violin
+
+
+dmr_exp_table2 <- DMR_W22 %>%
+  group_by(origin,category,class)%>%
+  summarise(n=n())%>%
+  mutate(Freq=n/sum(n))
+
+dmr_exp_table2 <- subset(dmr_exp_table2, dmr_exp_table2$class != ">2kb")
+
+bxp2 <- ggplot(dmr_exp_table2, aes(fill=class, y=Freq, x=category)) + geom_bar(position = "dodge", stat = "identity") + scale_fill_manual(values = maize_pal("FloweringTime")) + theme_classic() + scale_x_discrete(name= "Expression Category",labels=c("expressed.endo"="Endosperm", "not.endo"="Constitutive", "not.expressed"="Not expressed")) + ylab( "Frequency")
+bxp2 + facet_wrap(origin ~ .) + theme(axis.text.x = element_text( angle= 45, hjust = 1, size=15),text = element_text(size=20)) 
+```
+
+
+```{r}
+#Run stats on the new graphs and add to graph
+
+stat_GC_content <- GC_cont %>%
+  pairwise_t_test(V3 ~ origin, p.adjust.method = "fdr")
+stat_GC_content
+
+#Get p-values between imprints and not imprinted
+imp_stats <- read.table("dmr_imprint_table.txt",sep="\t",header=T,row.names= 1,stringsAsFactors = F)
+imp_stats_MEG_em <- read.table("dmr_imprint_table_MEGem.txt",sep="\t",header=T,row.names= 1,stringsAsFactors = F)
+imp_stats_MEG_en <- read.table("dmr_imprint_table_MEGen.txt",sep="\t",header=T,row.names= 1,stringsAsFactors = F)
+imp_stats_PEG_em <- read.table("dmr_imprint_table_PEGem.txt",sep="\t",header=T,row.names= 1,stringsAsFactors = F)
+imp_stats_PEG_en <- read.table("dmr_imprint_table_PEGen.txt",sep="\t",header=T,row.names= 1,stringsAsFactors = F)
+exp_stats <- read.table("dmr_exp_table.txt",sep="\t",header=T,row.names= 1,stringsAsFactors = F)
+exp_stats_Endo <- read.table("dmr_exp_table_endo.txt",sep="\t",header=T,row.names= 1,stringsAsFactors = F)
+exp_stats_Embryo <- read.table("dmr_exp_table_embryo.txt",sep="\t",header=T,row.names= 1,stringsAsFactors = F)
+chisq_imp_MEG_em <- chisq.test(imp_stats_MEG_em)
+chisq_imp_MEG_en <- chisq.test(imp_stats_MEG_en)
+chisq_imp_PEG_em <- chisq.test(imp_stats_PEG_em)
+chisq_imp_PEG_en <- chisq.test(imp_stats_PEG_en)
+chisq_exp <- chisq.test(exp_stats)
+chisq_imp <- chisq.test(imp_stats)
+chisq_exp_endo <- chisq.test(exp_stats_Endo)
+chisq_exp_embryo <- chisq.test(exp_stats_Embryo)
+
+chisq_imp
+chisq_exp
+
+chisq_imp_MEG_em 
+chisq_imp_MEG_en
+chisq_imp_PEG_em
+chisq_imp_PEG_en
+chisq_exp_embryo
+chisq_exp_endo
+
+library(gplots)
+dt <- as.table(as.matrix(exp_stats))
+balloonplot(t(dt),main="exp_stats",xlab = "",ylab="",label=F,show.margins = F)
+
+di <- as.table(as.matrix(imp_stats))
+balloonplot(t(di),main="imp_stats",xlab = "",ylab="",label=F,show.margins = F)
+
+library(corrplot)
+corrplot(chisq_imp$residuals, is.corr = F)
+corrplot(chisq_exp$residuals, is.corr = F)
+
+corrplot(chisq_exp_endo$residuals, is.corr = F)
+corrplot(chisq_exp_embryo$residuals, is.corr = F)
+```
+
+```{r}
+# Create motif frequency graph
+Ratios <- read.table("endo-embryo_motif_ratios.txt",sep="\t",header=T,stringsAsFactors = F)
+library(viridis)
+
+Ratios_endosperm <- subset(Ratios, Ratios$Tissue == "Endosperm")
+bxp_endosperm_ratio <- ggplot(Ratios_endosperm, aes(y=enrichment, x= reorder(motif, -DMR.Count), fill = enrichment)) + geom_bar( stat = "identity") + scale_fill_viridis(discrete = F) + theme_classic() + xlab("Motifs") + ylab("DMR enrichment over EMRs") + theme(axis.text.x = element_text( angle= 45, hjust=1)) + ggtitle("endosperm DMR motifs") 
+
+Ratios_embryo <- subset(Ratios, Ratios$Tissue == "Embryo")
+bxp_embryo_ratio <- ggplot(Ratios_embryo, aes(y=enrichment, x= reorder(motif, -DMR.Count), fill = enrichment)) + geom_bar( stat = "identity") + scale_fill_viridis(discrete = F) + theme_classic() + xlab("Motifs") + ylab("DMR enrichment over EMRs") + theme(axis.text.x = element_text( angle= 45, hjust=1)) + ggtitle(" embryo DMR motifs")
+
+
+bxp_endosperm_ratio
+bxp_embryo_ratio
+```
+```{r}
+GC_DMR <- subset(W22_endo_imp, W22_endo_imp$origin2 == "DMR")
+GC_EMR <- subset(W22_endo_imp, W22_endo_imp$origin2 == "EMR")
+
+```
+
+
+
+
+
+
+
+

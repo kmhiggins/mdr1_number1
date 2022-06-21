@@ -1,0 +1,126 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+
+#DMR and EMR files
+
+embryo_dmr <- read.table("embryo_DMRs_IDs.txt",sep="\ ",header=F,stringsAsFactors = F)
+endosperm_dmr <- read.table("endo_DMRs_IDs.txt",sep="\ ",header=F,stringsAsFactors = F)
+
+embryo_emr <- read.table("embryo_EMRs_IDs.txt",sep="\ ",header=F,stringsAsFactors = F)
+endosperm_emr <- read.table("endo_EMRs_IDs.txt",sep="\ ",header=F,stringsAsFactors = F)
+
+
+#Subsample EMRs
+embryo_emr_sub <- embryo_emr[sample(1:nrow(embryo_emr), 56781, replace=FALSE),]
+endosperm_emr_sub <- endosperm_emr[sample(1:nrow(endosperm_emr), 19947, replace=FALSE),]
+
+#W22 files
+W22_imp <- read.table("B73.v.W22_features.out.txt", sep = "\t", header = T, stringsAsFactors = F)
+W22_exp <- read.table("genes.expressed.in.endosperm.vs.expressed.elsewhere.txt", sep = "\t", header = T, stringsAsFactors = F)
+```
+Load Packages for notebook
+```{r}
+library(ggplot2)
+library(DESeq2)
+library(RColorBrewer)
+library(epitools)
+library(rstatix)
+library(ggpubr)
+library(dplyr)
+library(vcd)
+library(gridExtra)
+library(sjPlot)
+library(knitr)
+library(MaizePal)
+library(ggsci)
+library(wesanderson)
+library(rstatix)
+library(tidyr)
+```
+
+
+
+```{r}
+#Remove B73 genes and only work with W22 endosperm expressed
+W22_imp <- W22_imp[grep("Zm00004", W22_imp$feature),]
+W22_imp <- W22_imp[-c(2:13,15:21)]
+#Remove gene model ids since its not necessary
+
+#Combine dataframes so we know which are endosperm expressed and which arent
+W22_info <- W22_imp
+W22_info$category <- ifelse(W22_info$feature %in% W22_exp$W22.Zm00004b.1., paste(W22_exp$category), "not.expressed")
+
+
+# Read in gene.key to find syntenic genes and subset W22 to only include genes also annotated in B73
+synt <- read.table("gene_model_xref_v4c.txt", header = T, sep = "\t", stringsAsFactors = F)
+
+W22_info <- subset(W22_info, W22_info$feature %in% synt$W22.Zm00004b.1.)
+# Subset by sorghum syntelogs
+synt <- subset(synt, nchar(synt$sorghum_ortholog) > 0)
+
+# Find sorghum syntelogs 
+
+W22_info$syntelog <- ifelse(W22_info$feature %in% synt$W22.Zm00004b.1., "syntenic.sorghum", "not.syntenic")
+```
+Combine dmr/emr information into table
+
+
+
+
+```{r}
+#Join dfs into one
+
+dmr_endo <- bind_rows(embryo_dmr, endosperm_dmr, .id = "origin")
+
+# Replace numbers with df origin name
+
+dmr_endo$origin <- ifelse(dmr_endo$origin == 1, "embryo",
+                                 ifelse(dmr_endo$origin == 2, "endosperm", "bad"))
+
+
+# Get rid of empty columns
+dmr_endo$Description <- NULL
+dmr_endo$X <- NULL
+
+DMR_W22<- merge(dmr_endo, W22_info, by.x = "V2", by.y = "feature", all=T)
+
+DMR_W22$class  <- ifelse(DMR_W22$V3 > 2000, ">2kb",ifelse(DMR_W22$V3 < -2000, ">2kb", ifelse(DMR_W22$V3 < 0, "<2kb upstream", ifelse(DMR_W22$V3 == 0, "zero", "<2kb downstream"))))
+
+DMR_W22 <- DMR_W22%>% 
+  reorder_levels(class, order = c("zero", ">2kb", "<2kb upstream", "<2kb downstream"))
+
+```
+
+
+
+```{r}
+dmr_exp_table2 <- DMR_W22 %>%
+  group_by(origin,category,class)%>%
+  summarise(n=n())%>%
+  mutate(Freq=n/sum(n))
+
+dmr_exp_table2 <- subset(dmr_exp_table2, dmr_exp_table2$class != ">2kb")
+
+dmr_exp_table2 <- subset(dmr_exp_table2, dmr_exp_table2$category != "NA")
+
+bxp2 <- ggplot(dmr_exp_table2, aes(fill=class, y=Freq, x=category)) + geom_bar(position = "dodge", stat = "identity") + scale_fill_manual(values = maize_pal("FloweringTime")) + theme_classic() + scale_x_discrete(name= "Expression Category",labels=c("expressed.endo"="Endosperm", "not.endo"="Constitutive", "not.expressed"="Not expressed")) + ylab( "Frequency")
+bxp2 + facet_wrap(origin ~ .) + theme(axis.text.x = element_text( angle= 45, hjust = 1, size=15),text = element_text(size=20)) 
+
+
+exp_stats_Endo <- read.table("dmr_exp_table_endo.txt",sep="\t",header=T,row.names= 1,stringsAsFactors = F)
+exp_stats_Embryo <- read.table("dmr_exp_table_embryo.txt",sep="\t",header=T,row.names= 1,stringsAsFactors = F)
+
+chisq_exp_endo <- chisq.test(exp_stats_Endo)
+chisq_exp_embryo <- chisq.test(exp_stats_Embryo)
+
+chisq_exp_embryo
+chisq_exp_endo
+```
